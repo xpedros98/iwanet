@@ -1,0 +1,96 @@
+.login-page {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  box-sizing: border-box;
+  background: #fff;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 340px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 32px 28px;
+  border: 1px solid #e5e5e5;
+  border-radius: 12px;
+  box-sizing: border-box;
+}
+
+.login-card h1 {
+  margin: 0 0 4px;
+  font-size: 24px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.login-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+  padding: 3px;
+}
+
+.login-tabs button {
+  border: 0;
+  border-radius: 6px;
+  padding: 8px;
+  background: transparent;
+  color: #666;
+  font: inherit;
+  cursor: pointer;
+}
+
+.login-tabs button[aria-selected='true'] {
+  background: #f2f2f2;
+  color: #111;
+  font-weight: 600;
+}
+
+.login-card label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+  color: #333;
+}
+
+.login-card input {
+  padding: 10px 12px;
+  border: 1px solid #d0d0d0;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 15px;
+}
+
+.login-card input:focus {
+  outline: 2px solid #2f6fed;
+  outline-offset: -1px;
+  border-color: transparent;
+}
+
+.login-error {
+  min-height: 1.3em; /* reserve the line so the form doesn't jump */
+  margin: 0;
+  color: #c62828;
+  font-size: 14px;
+}
+
+.login-submit {
+  padding: 11px;
+  border: 0;
+  border-radius: 8px;
+  background: #111;
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.login-submit:disabled {
+  opacity: 0.45;
+  cursor: default;
+}

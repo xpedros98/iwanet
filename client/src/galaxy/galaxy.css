@@ -1,0 +1,62 @@
+.galaxy {
+  position: fixed;
+  inset: 0;
+  background: #05060a;
+}
+
+.galaxy-user {
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font-size: 14px;
+  /* The label sits over the canvas; only its own area takes clicks. */
+  pointer-events: auto;
+}
+
+.galaxy-error {
+  position: fixed;
+  bottom: 16px;
+  left: 16px;
+  margin: 0;
+  color: #ff8a80;
+  font-size: 14px;
+}
+
+.galaxy-name {
+  font-weight: 600;
+}
+
+.galaxy-user button {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: rgba(255, 255, 255, 0.7);
+  font: inherit;
+  cursor: pointer;
+}
+
+.galaxy-user button:hover {
+  color: #fff;
+}
+
+/* Star name on hover / after a click (moved with a transform by Picker.tsx). */
+.galaxy-hover {
+  position: fixed;
+  left: 0;
+  top: 0;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(10, 14, 28, 0.75);
+  color: #e8eefc;
+  font-size: 13px;
+  white-space: nowrap;
+  pointer-events: none;
+  will-change: transform;
+}

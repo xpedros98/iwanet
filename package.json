@@ -1,0 +1,20 @@
+{
+  "name": "galaxy",
+  "private": true,
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n server,client -c blue,magenta \"npm run dev -w server\" \"npm run dev -w client\"",
+    "build": "npm run build -w client && npm run build -w server",
+    "start": "npm run start -w server",
+    "typecheck": "npm run typecheck -w server && npm run typecheck -w client",
+    "seed": "npm run seed -w server --",
+    "reset": "npm run reset -w server --",
+    "layout": "npm run layout -w server"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.7"
+  }
+}

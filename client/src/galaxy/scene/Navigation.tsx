@@ -7,7 +7,7 @@ import { damp, prefersReducedMotion } from './util';
 import type { Activity } from './Pacer';
 
 const FLY_SECONDS = 2.5; // a flight settles within this (smoothTime 0.6 → ~1% left after 2 s)
-const IDLE_SECONDS = 0.1; // after a drag, the slow drift eases back in this soon (longer looks like a freeze)
+const IDLE_SECONDS = 0; // after a drag, the slow drift eases back in at once (any pause looks like a freeze)
 const FLING_DECAY = 1.8; // 1/s: momentum after a drag halves every ~0.4 s
 const FLING_MAX = 3; // rad/s: a very fast flick doesn't spin wildly
 const FLING_MIN = 0.02; // rad/s: below this the momentum is over
@@ -68,6 +68,8 @@ export function Navigation({
     vel: { az: 0, polar: 0 },
     fling: { az: 0, polar: 0 },
     prev: { az: 0, polar: 0, dragging: false },
+    /** +1 or -1: the drift keeps the direction of the last flick, so the two never cancel into a stop. */
+    driftDir: 1,
   });
   const now = () => performance.now() / 1000;
 
@@ -216,6 +218,7 @@ export function Navigation({
     } else if (m.prev.dragging && !reduced) {
       const clamp = (v: number) => Math.max(-FLING_MAX, Math.min(FLING_MAX, v));
       m.fling.az = clamp(m.vel.az);
+      if (Math.abs(m.fling.az) > FLING_MIN) m.driftDir = Math.sign(m.fling.az);
       m.fling.polar = clamp(m.vel.polar);
       m.vel.az = m.vel.polar = 0;
     }
@@ -235,7 +238,7 @@ export function Navigation({
       activity.wake(0.2); // edge turning is fast enough to need full frame rate
     }
     else if (t - m.lastActivity > IDLE_SECONDS)
-      target = DRIFT_SPEED * Math.min(1, (t - m.lastActivity - IDLE_SECONDS) / DRIFT_RAMP) * (pointer.hovering ? HOVER_DRIFT : 1);
+      target = m.driftDir * DRIFT_SPEED * Math.min(1, (t - m.lastActivity - IDLE_SECONDS) / DRIFT_RAMP) * (pointer.hovering ? HOVER_DRIFT : 1);
 
     m.speed += (target - m.speed) * damp(5, delta); // ease speed changes over ~0.2 s
     // Faster than the drift (edge turning, or easing out of it): full frame rate.

@@ -111,7 +111,7 @@ export function HelpPanel({ onClose }: { onClose: () => void }) {
       <ul>
         {ITEMS.map((it) => (
           <li key={it.pic}>
-            <svg viewBox="0 0 68 62" width="68" height="62" aria-hidden="true">
+            <svg viewBox="0 0 68 62" width="40" height="36" aria-hidden="true">
               {pics[it.pic]}
             </svg>
             <div>

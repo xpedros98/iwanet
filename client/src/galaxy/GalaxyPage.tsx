@@ -13,16 +13,6 @@ type Props = { user: User; onLogout: () => void; bench?: boolean };
 const SPIN_KEY = 'galaxy.spin';
 const SPIN_DEFAULT = 25;
 const spinMultiplier = (v: number) => (v / SPIN_DEFAULT) ** 2;
-// The help panel opens by itself on the first visit only.
-const HELP_SEEN_KEY = 'galaxy.helpSeen';
-function firstVisit(): boolean {
-  try {
-    return localStorage.getItem(HELP_SEEN_KEY) === null;
-  } catch {
-    return false;
-  }
-}
-
 function savedSpin(): number {
   try {
     const v = Number(localStorage.getItem(SPIN_KEY));
@@ -37,15 +27,8 @@ export default function GalaxyPage({ user, onLogout, bench = false }: Props) {
   const [error, setError] = useState('');
   const nav = useRef<NavHandle | null>(null);
   const [spinValue, setSpinValue] = useState(savedSpin);
-  const [helpOpen, setHelpOpen] = useState(() => !bench && firstVisit());
-  const closeHelp = useCallback(() => {
-    setHelpOpen(false);
-    try {
-      localStorage.setItem(HELP_SEEN_KEY, '1');
-    } catch {
-      /* ignore */
-    }
-  }, []);
+  const [helpOpen, setHelpOpen] = useState(false); // opened only with the "?" button
+  const closeHelp = useCallback(() => setHelpOpen(false), []);
   // Read every frame by Navigation; a plain object, so moving the slider doesn't re-render the scene.
   const spin = useMemo(() => ({ value: spinMultiplier(spinValue) }), []); // eslint-disable-line react-hooks/exhaustive-deps
   spin.value = spinMultiplier(spinValue);

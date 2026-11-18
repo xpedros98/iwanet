@@ -10,8 +10,7 @@
  * Output is deterministic: the same --users and --seed give the same data,
  * so benchmarks are comparable between runs.
  */
-import { statSync } from 'node:fs';
-import { db, DB_PATH } from './db.js';
+import { one, pool, tx } from './db.js';
 import { hashPassword } from './password.js';
 
 // ---------------------------------------------------------------- arguments
@@ -57,31 +56,20 @@ const t0 = performance.now();
 const lap = (label: string) => console.log(`${label.padEnd(34)} ${((performance.now() - t0) / 1000).toFixed(2)} s`);
 
 // ------------------------------------------------------------ reset / guard
-const existing = (db.prepare('SELECT count(*) AS n FROM users').get() as { n: number }).n;
+const existing = (await one<{ n: number }>('SELECT count(*) AS n FROM users'))!.n;
 if (existing > 0 && !RESET) {
   console.error(`The database already has ${existing} users. Use "npm run reset" to start over.`);
+  await pool.end();
   process.exit(1);
 }
 
-// Bulk load: data is generated consistently, so skip per-row foreign key checks,
-// and skip fsync (if this crashes, just run it again).
-db.exec('PRAGMA foreign_keys = OFF; PRAGMA synchronous = OFF;');
+// Rows go up in chunks, one statement per chunk (columns sent as arrays and
+// unpacked by unnest): a round trip per row would take minutes over the network.
+const CHUNK = 20_000;
 
 if (RESET) {
-  // Emptying tables (instead of deleting the file) also works while the dev
-  // server has the database open, which Windows wouldn't allow for a delete.
-  db.exec(`
-    BEGIN;
-    DELETE FROM friendships;
-    DELETE FROM stars;
-    DELETE FROM sessions;
-    DELETE FROM users;
-    DELETE FROM sqlite_sequence WHERE name = 'users';
-    COMMIT;
-  `);
-  // Deleted rows leave free pages behind; VACUUM gives the space back.
-  // It rewrites the database, which is instant now that the tables are empty.
-  db.exec('VACUUM');
+  // TRUNCATE also resets the id counter. Sessions go too: their users are gone.
+  await pool.query('TRUNCATE friendships, stars, sessions, users RESTART IDENTITY');
   lap(`reset (removed ${existing} users)`);
 }
 
@@ -99,14 +87,23 @@ const span = YEARS * 365 * 24 * 3600;
 
 // Join times grow like (t/T)^2: few early users, more and more over time.
 // Index i joins at T·sqrt(i/N); user 0 ("demo") is the very first.
-const insertUser = db.prepare('INSERT INTO users (id, username, hash, created_at) VALUES (?, ?, ?, ?)');
-db.exec('BEGIN');
+const names: string[] = [], joined: number[] = [];
 for (let i = 0; i < N; i++) {
-  const name = i === 0 ? 'demo' : `${ADJ[randInt(0, ADJ.length - 1)]}${NOUN[randInt(0, NOUN.length - 1)]}${i}`;
-  const t = now - span + Math.floor(span * Math.sqrt(i / N));
-  insertUser.run(i + 1, name, hash, t);
+  names.push(i === 0 ? 'demo' : `${ADJ[randInt(0, ADJ.length - 1)]}${NOUN[randInt(0, NOUN.length - 1)]}${i}`);
+  joined.push(now - span + Math.floor(span * Math.sqrt(i / N)));
 }
-db.exec('COMMIT');
+await tx(async (c) => {
+  for (let p = 0; p < N; p += CHUNK) {
+    const ids = Array.from({ length: Math.min(CHUNK, N - p) }, (_, k) => p + k + 1);
+    await c.query(
+      `INSERT INTO users (id, username, hash, created_at)
+       SELECT id, username, $3, created_at FROM unnest($1::int[], $2::text[], $4::bigint[]) AS t(id, username, created_at)`,
+      [ids, names.slice(p, p + CHUNK), hash, joined.slice(p, p + CHUNK)],
+    );
+  }
+  // Ids were given explicitly, so move the id counter past them for later sign-ups.
+  await c.query("SELECT setval(pg_get_serial_sequence('users', 'id'), $1)", [N]);
+});
 lap(`users (${N.toLocaleString('en')})`);
 
 // ----------------------------------------------------------- friend groups
@@ -164,8 +161,7 @@ for (let u = 0; u < N; u++) {
 lap(`friendships generated (${(edges.length / 2).toLocaleString('en')})`);
 
 // Store both directions, so "friends of X" is a range scan on the primary key.
-// Insert in primary-key order: the WITHOUT ROWID table is a B-tree keyed by
-// (user_id, friend_id), and sorted inserts only ever append to it.
+// Inserted in primary-key order, so the index only ever grows at its end.
 const directed = new Float64Array(edges.length); // key = a * N + b
 for (let k = 0; k < edges.length; k += 2) {
   const a = edges[k]!, b = edges[k + 1]!;
@@ -174,26 +170,33 @@ for (let k = 0; k < edges.length; k += 2) {
 }
 directed.sort();
 
-const insertFriend = db.prepare('INSERT INTO friendships (user_id, friend_id) VALUES (?, ?)');
-db.exec('BEGIN');
-for (const key of directed) {
-  insertFriend.run(Math.floor(key / N) + 1, (key % N) + 1);
-}
-db.exec('COMMIT');
+await tx(async (c) => {
+  for (let p = 0; p < directed.length; p += CHUNK) {
+    const part = directed.subarray(p, p + CHUNK);
+    await c.query('INSERT INTO friendships (user_id, friend_id) SELECT * FROM unnest($1::int[], $2::int[])', [
+      Array.from(part, (key) => Math.floor(key / N) + 1),
+      Array.from(part, (key) => (key % N) + 1),
+    ]);
+  }
+});
 lap(`friendships stored (${directed.length.toLocaleString('en')} rows)`);
 
 // --------------------------------------------------------------- summary
-db.exec('PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL; PRAGMA wal_checkpoint(TRUNCATE); ANALYZE;');
+await pool.query('ANALYZE users; ANALYZE friendships');
 
 const sorted = Array.from(degree).sort((a, b) => a - b);
 const pct = (q: number) => sorted[Math.min(N - 1, Math.floor(q * N))];
 const mean = sorted.reduce((a, b) => a + b, 0) / N;
 const sizes = groups.map((g) => g.length);
-const mb = (statSync(DB_PATH).size / 1024 / 1024).toFixed(1);
+const { bytes } = (await one<{ bytes: number }>(
+  "SELECT sum(pg_total_relation_size(t))::bigint AS bytes FROM unnest(array['users', 'friendships', 'stars', 'sessions', 'meta']::regclass[]) AS t",
+))!;
+const mb = (bytes / 1024 / 1024).toFixed(1);
 
 console.log(`
 users          ${N.toLocaleString('en')}   (login: demo / test, or any user / test)
 groups         ${groups.length.toLocaleString('en')}   size ${Math.min(...sizes)}–${Math.max(...sizes)}
 friends/user   min ${pct(0)}  median ${pct(0.5)}  mean ${mean.toFixed(1)}  p95 ${pct(0.95)}  max ${pct(1 - 1 / N)}
-database       ${DB_PATH}  (${mb} MB)`);
+database       Postgres tables ${mb} MB`);
 lap('done');
+await pool.end();

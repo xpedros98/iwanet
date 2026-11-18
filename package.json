@@ -12,9 +12,11 @@
     "typecheck": "npm run typecheck -w server && npm run typecheck -w client",
     "seed": "npm run seed -w server --",
     "reset": "npm run reset -w server --",
-    "layout": "npm run layout -w server"
+    "layout": "npm run layout -w server",
+    "bench": "node tools/bench.mjs"
   },
   "devDependencies": {
-    "concurrently": "^10.0.7"
+    "concurrently": "^10.0.7",
+    "puppeteer-core": "^24.43.1"
   }
 }

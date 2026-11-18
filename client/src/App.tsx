@@ -25,6 +25,7 @@ export function App() {
     <Suspense fallback={<div className="galaxy-loading" />}>
       <GalaxyPage
         user={user}
+        bench={location.pathname === '/bench'} // the benchmark flight (scene/Bench.tsx)
         onLogout={async () => {
           await logout().catch(() => {});
           setUser(null);

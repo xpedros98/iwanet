@@ -13,6 +13,8 @@ export const starVertex = /* glsl */ `
   attribute vec3 aColor;
   attribute float aSize;
   attribute float aPhase;
+  attribute vec3 aPrev;   // glide start (live updates)
+  attribute float aBorn;  // 1 = new star, grows in during the glide
 
   uniform float uTime;
   uniform float uPixelRatio;
@@ -22,18 +24,21 @@ export const starVertex = /* glsl */ `
   uniform float uMaxPx;
   uniform float uPulse;     // 0 = steady, 1 = full pulse
   uniform float uFade;      // 0..1 fade-in
+  uniform float uGlide;     // 0..1 glide progress (background: always 1)
 
   varying vec3 vColor;
   varying float vBright;
 
   void main() {
-    vec4 mv = modelViewMatrix * vec4(position, 1.0);
-    float pulse = sin(uTime * 0.9 + aPhase) * uPulse;
-    float px = aSize * uBaseSize * uScale / -mv.z * (1.0 + 0.06 * pulse);
+    vec4 mv = modelViewMatrix * vec4(mix(aPrev, position, uGlide), 1.0);
+    float birth = mix(1.0, uGlide, aBorn);
+    // Slow "breathing": one breath every ~6 s (2π / 1.05).
+    float pulse = sin(uTime * 1.05 + aPhase) * uPulse;
+    float px = aSize * uBaseSize * uScale / -mv.z * (1.0 + 0.10 * pulse) * (1.0 + 1.5 * aBorn * sin(birth * 3.14159)) * birth;
     gl_PointSize = clamp(px, uMinPx, uMaxPx) * uPixelRatio;
     gl_Position = projectionMatrix * mv;
     vColor = aColor;
-    vBright = (0.88 + 0.12 * pulse) * uFade;
+    vBright = (0.85 + 0.15 * pulse) * uFade * birth;
   }
 `;
 
@@ -57,10 +62,14 @@ export const starFragment = /* glsl */ `
 /** Friendship lines: the star positions and colours, drawn faint. */
 export const lineVertex = /* glsl */ `
   attribute vec3 aColor;
+  attribute vec3 aPrev;
+  attribute float aBorn;
+  uniform float uGlide;
   varying vec3 vColor;
   void main() {
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-    vColor = aColor;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(mix(aPrev, position, uGlide), 1.0);
+    // a line touching a new star fades in with it
+    vColor = aColor * mix(1.0, uGlide, aBorn);
   }
 `;
 
@@ -76,8 +85,10 @@ export const lineFragment = /* glsl */ `
 export const ringVertex = /* glsl */ `
   uniform float uPixelRatio;
   uniform float uPx;
+  uniform float uGlide;
+  attribute vec3 aPrev;
   void main() {
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(mix(aPrev, position, uGlide), 1.0);
     gl_PointSize = uPx * uPixelRatio;
   }
 `;

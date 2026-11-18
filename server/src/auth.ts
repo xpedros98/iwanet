@@ -1,13 +1,17 @@
 import { Router, type Request, type RequestHandler } from 'express';
-import { users, isUniqueViolation, type UserRow } from './db.js';
+import { users, isUniqueViolation } from './db.js';
 import { hashPassword, verifyPassword, DUMMY_HASH } from './password.js';
-import { requestLayout } from './layoutScheduler.js';
+import { announceVersion, requestLayout } from './layoutScheduler.js';
+import { placeNewcomer } from './layoutJob.js';
 
 declare module 'express-session' {
   interface SessionData {
     userId: number;
   }
 }
+
+/** Called with the session id on logout (live.ts closes that session's streams). */
+export const logoutHooks: ((sessionId: string) => void)[] = [];
 
 const USERNAME_RE = /^[A-Za-z0-9_.-]{3,20}$/;
 // Minimum 4 so the seeded test accounts (password "test") work. Raise before going public.
@@ -59,7 +63,7 @@ authRouter.post('/register', async (req, res) => {
   const hash = await hashPassword(creds.password);
   let id: number;
   try {
-    id = Number(users.insert.run(creds.username, hash).lastInsertRowid);
+    id = await users.insert(creds.username, hash);
   } catch (err) {
     if (isUniqueViolation(err)) {
       res.status(409).json({ error: 'That username is taken' });
@@ -68,7 +72,11 @@ authRouter.post('/register', async (req, res) => {
     throw err;
   }
   await startSession(req, id);
-  requestLayout('new user'); // runs in a worker thread; the response doesn't wait for it
+  // Visible to everyone at once, at its seed position; the full layout (worker
+  // thread, the response doesn't wait for it) then settles it among the others.
+  const version = await placeNewcomer(id);
+  if (version !== null) announceVersion(version);
+  requestLayout('new user');
   res.status(201).json({ id, username: creds.username });
 });
 
@@ -78,7 +86,7 @@ authRouter.post('/login', async (req, res) => {
     res.status(400).json({ error: creds });
     return;
   }
-  const user = users.byName.get(creds.username) as UserRow | undefined;
+  const user = await users.byName(creds.username);
   // Always run one scrypt, so the response time doesn't reveal whether the user exists.
   const ok = await verifyPassword(creds.password, user?.hash ?? DUMMY_HASH);
   if (!user || !ok) {
@@ -90,15 +98,17 @@ authRouter.post('/login', async (req, res) => {
 });
 
 authRouter.post('/logout', (req, res, next) => {
+  const sid = req.sessionID;
   req.session.destroy((err) => {
     if (err) return next(err);
+    for (const hook of logoutHooks) hook(sid);
     res.clearCookie('sid');
     res.status(204).end();
   });
 });
 
-authRouter.get('/me', requireAuth, (req, res) => {
-  const user = users.byId.get(req.session.userId!) as { id: number; username: string } | undefined;
+authRouter.get('/me', requireAuth, async (req, res) => {
+  const user = await users.byId(req.session.userId!);
   if (!user) {
     // The account was deleted (for example by a database reset) while the cookie lived on.
     req.session.destroy(() => res.status(401).json({ error: 'Not logged in' }));

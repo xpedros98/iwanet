@@ -1,9 +1,10 @@
 import { CameraControls } from '@react-three/drei';
 import { useFrame, useThree } from '@react-three/fiber';
-import { type ComponentRef, type Ref, useImperativeHandle, useLayoutEffect, useMemo, useRef } from 'react';
+import { type ComponentRef, type Ref, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
-import type { Galaxy } from '../../api';
+import { shownPosition, type FrameUniforms, type Glide } from './GalaxyScene';
 import { damp, prefersReducedMotion } from './util';
+import type { Activity } from './Pacer';
 
 const FLY_SECONDS = 2.5; // a flight settles within this (smoothTime 0.6 → ~1% left after 2 s)
 const IDLE_SECONDS = 4; // no interaction for this long → slow drift starts
@@ -11,9 +12,17 @@ const DRIFT_RAMP = 3; // seconds to ease the drift in
 const DRIFT_SPEED = 0.012; // rad/s ≈ one turn every 9 minutes
 const EDGE_SPEED = 0.7; // rad/s at the very edge of the screen
 const EDGE_ZONE = 0.08; // fraction of the width, each side
+const HOVER_DRIFT = 0.5; // drift keeps going while a star is hovered, at half speed (the star stays under the cursor for a few seconds)
 
 /** Mouse state shared with Picker (it owns the listeners). */
-export type PointerState = { inside: boolean; x: number; dragging: boolean; hovering: boolean };
+export type PointerState = {
+  inside: boolean;
+  x: number;
+  dragging: boolean;
+  hovering: boolean;
+  /** star whose friendships are highlighted (hovered, else selected), or -1 */
+  highlight: number;
+};
 export type NavHandle = { flyTo: (index: number) => void; flyHome: () => void };
 
 /**
@@ -21,82 +30,113 @@ export type NavHandle = { flyTo: (index: number) => void; flyHome: () => void };
  * from the frame time, so drag, zoom and flights feel the same at 60 and 144 Hz
  * (OrbitControls' damping is per frame, so it is faster on faster screens).
  *
- * Also: the intro flight, click-to-fly, a slow idle drift and turning at the
- * screen edges. All of it is one camera update per frame, nothing else.
+ * Also: the intro flight, click-to-fly, a slow idle drift, turning at the
+ * screen edges, and following the focused star while it glides after a live
+ * update. All of it is at most one camera update per frame.
  */
 export function Navigation({
-  galaxy,
-  myPos,
+  glide,
+  mine,
+  frame,
   pointer,
+  activity,
+  scripted = false,
   ref,
 }: {
-  galaxy: Galaxy;
-  myPos: [number, number, number] | null;
+  glide: Glide;
+  /** index of your star, or -1 if it has no position yet */
+  mine: number;
+  frame: FrameUniforms;
   pointer: PointerState;
+  activity: Activity;
+  /** the benchmark drives the camera: no intro, drift, edge turning or follow */
+  scripted?: boolean;
   ref: Ref<NavHandle>;
 }) {
   const controls = useRef<ComponentRef<typeof CameraControls>>(null);
   const size = useThree((s) => s.size);
-  const R = galaxy.shape.radius;
+  const R = glide.galaxy.shape.radius;
   const reduced = useMemo(prefersReducedMotion, []);
   const motion = useRef({ lastActivity: 0, flyingUntil: 0, speed: 0 });
   const now = () => performance.now() / 1000;
 
-  // Home view: just outside your star, looking a little toward the centre.
-  const home = useMemo(() => {
-    if (!myPos) return { pos: [0, R * 1.45, R * 1.25], look: [0, 0, 0] };
-    const t = new THREE.Vector3(...myPos);
+  // The star the camera is looking at (user id), followed while stars glide.
+  const focus = useRef<{ id: number; last: THREE.Vector3; valid: boolean }>({ id: -1, last: new THREE.Vector3(), valid: false });
+  const tmp = useMemo(() => ({ p: new THREE.Vector3(), t: new THREE.Vector3(), c: new THREE.Vector3(), e: new THREE.Vector3() }), []);
+
+  /** Home view: just outside your star, looking a little toward the centre. */
+  const homeView = () => {
+    if (mine < 0) return { pos: [0, R * 1.45, R * 1.25], look: [0, 0, 0] };
+    const t = shownPosition(glide, frame.uGlide.value, mine, new THREE.Vector3());
     const out = new THREE.Vector3(t.x, 0, t.z);
     if (out.lengthSq() < 1e-6) out.set(0, 0, 1);
     out.normalize();
     const pos = t.clone().addScaledVector(out, R * 0.55).add(new THREE.Vector3(0, R * 0.3, 0));
-    const look = t.clone().multiplyScalar(0.75);
-    return { pos: pos.toArray(), look: look.toArray() };
-  }, [myPos, R]);
+    return { pos: pos.toArray(), look: t.clone().multiplyScalar(0.75).toArray() };
+  };
 
-  const fly = (pos: number[], look: number[]) => {
+  const fly = (pos: number[], look: number[], focusIndex: number) => {
     const c = controls.current;
     if (!c) return;
     const m = motion.current;
     m.speed = 0; // a rotate() during the flight would cut its rotation short
     m.lastActivity = now();
     m.flyingUntil = m.lastActivity + FLY_SECONDS;
+    activity.wake(FLY_SECONDS);
+    focus.current.id = focusIndex >= 0 ? glide.galaxy.ids[focusIndex]! : -1;
+    focus.current.valid = false;
     void c.setLookAt(pos[0]!, pos[1]!, pos[2]!, look[0]!, look[1]!, look[2]!, !reduced);
   };
 
+  const flyHome = () => {
+    const h = homeView();
+    fly(h.pos, h.look, mine);
+  };
+
   useImperativeHandle(ref, () => ({
-    flyHome: () => fly(home.pos, home.look),
+    flyHome,
     // Keep the current viewing direction, come in close to the star.
     flyTo: (i) => {
       const c = controls.current;
       if (!c) return;
-      const p = galaxy.positions;
-      const star = new THREE.Vector3(p[i * 3]!, p[i * 3 + 1]!, p[i * 3 + 2]!);
+      const star = shownPosition(glide, frame.uGlide.value, i, new THREE.Vector3());
       const dir = c.getPosition(new THREE.Vector3()).sub(c.getTarget(new THREE.Vector3()));
       if (dir.lengthSq() < 1e-6) dir.set(0, 1, 1);
       dir.normalize().multiplyScalar(R * 0.2);
-      fly(star.clone().add(dir).toArray(), star.toArray());
+      fly(star.clone().add(dir).toArray(), star.toArray(), i);
     },
   }));
 
-  // Intro: the whole galaxy from above, then (after the fade-in) fly home.
-  // Touching the controls before that cancels the flight.
+  // Intro, once: the whole galaxy from above, then (after the fade-in) fly
+  // home. Touching the controls before that cancels the flight.
+  const introDone = useRef(false);
   useLayoutEffect(() => {
     const c = controls.current;
     if (!c) return;
     void c.setLookAt(0, R * 1.45, R * 1.25, 0, 0, 0, false);
-    if (reduced) {
-      void c.setLookAt(...(home.pos as [number, number, number]), ...(home.look as [number, number, number]), false);
-      return;
-    }
     motion.current.lastActivity = now();
-    const timer = setTimeout(() => fly(home.pos, home.look), 1200);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    if (scripted) introDone.current = true;
+    else if (mine >= 0) {
+      introDone.current = true;
+      if (reduced) {
+        const h = homeView();
+        void c.setLookAt(h.pos[0]!, h.pos[1]!, h.pos[2]!, h.look[0]!, h.look[1]!, h.look[2]!, false);
+        focus.current.id = glide.galaxy.ids[mine]!;
+      } else timer = setTimeout(flyHome, 1200);
+    }
     const onStart = () => {
+      activity.wake(0.5);
       clearTimeout(timer);
       motion.current.speed = 0;
       motion.current.lastActivity = now();
     };
-    const onActivity = () => (motion.current.lastActivity = now());
+    // 'control' fires for drags AND for the mouse wheel (the wheel sends no
+    // 'controlstart'). Only a drag pauses the drift: zooming is not steering.
+    const onActivity = () => {
+      if (pointer.dragging) motion.current.lastActivity = now();
+      activity.wake(0.5);
+    };
     c.addEventListener('controlstart', onStart);
     c.addEventListener('control', onActivity);
     return () => {
@@ -105,28 +145,70 @@ export function Navigation({
       c.removeEventListener('control', onActivity);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [galaxy, home]);
+  }, []);
 
-  // Edge turning and idle drift. Runs after CameraControls' own update (priority -1).
+  // A user who has just registered has no star until the layout runs (~1 s).
+  // When it appears in a live update, fly to it once.
+  useEffect(() => {
+    if (mine >= 0 && !introDone.current) {
+      introDone.current = true;
+      setTimeout(flyHome, 600); // let the birth animation start first
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mine]);
+
+  // Runs after CameraControls' own update (priority -1).
   useFrame((_, rawDelta) => {
     const c = controls.current;
-    if (!c || reduced) return;
+    if (!c || scripted) return;
     const delta = Math.min(rawDelta, 0.1);
     const m = motion.current;
     const t = now();
-    if (t < m.flyingUntil) return;
 
+    // Still smoothing toward where the user sent it (zoom, drag inertia,
+    // flight)? Then full frame rate. The drift never counts: it rotates with
+    // no transition, so the camera is always AT its end position.
+    const eps = (R * 1e-4) ** 2;
+    if (
+      c.getPosition(tmp.c, false).distanceToSquared(c.getPosition(tmp.e, true)) > eps ||
+      c.getTarget(tmp.c, false).distanceToSquared(c.getTarget(tmp.e, true)) > eps
+    )
+      activity.wake(0.15);
+
+    // Follow the focused star while it glides: shift camera and target by
+    // the star's movement this frame, so it stays where it is on screen.
+    const f = focus.current;
+    const i = f.id >= 0 ? glide.index.get(f.id) : undefined;
+    if (i !== undefined) {
+      shownPosition(glide, frame.uGlide.value, i, tmp.p);
+      if (f.valid && t >= m.flyingUntil && !tmp.p.equals(f.last)) {
+        tmp.c.subVectors(tmp.p, f.last);
+        c.getPosition(tmp.t).add(tmp.c);
+        const px = tmp.t.x, py = tmp.t.y, pz = tmp.t.z;
+        c.getTarget(tmp.t).add(tmp.c);
+        void c.setLookAt(px, py, pz, tmp.t.x, tmp.t.y, tmp.t.z, false);
+      }
+      f.last.copy(tmp.p);
+      f.valid = true;
+    }
+
+    if (reduced || t < m.flyingUntil) return;
     let target = 0;
     if (pointer.inside && !pointer.dragging) {
       const zone = Math.max(40, size.width * EDGE_ZONE);
       if (pointer.x < zone) target = -EDGE_SPEED * ((zone - pointer.x) / zone) ** 2;
       else if (pointer.x > size.width - zone) target = EDGE_SPEED * ((pointer.x - (size.width - zone)) / zone) ** 2;
     }
-    if (target !== 0) m.lastActivity = t;
-    else if (!pointer.hovering && t - m.lastActivity > IDLE_SECONDS)
-      target = DRIFT_SPEED * Math.min(1, (t - m.lastActivity - IDLE_SECONDS) / DRIFT_RAMP);
+    if (target !== 0) {
+      m.lastActivity = t;
+      activity.wake(0.2); // edge turning is fast enough to need full frame rate
+    }
+    else if (t - m.lastActivity > IDLE_SECONDS)
+      target = DRIFT_SPEED * Math.min(1, (t - m.lastActivity - IDLE_SECONDS) / DRIFT_RAMP) * (pointer.hovering ? HOVER_DRIFT : 1);
 
     m.speed += (target - m.speed) * damp(5, delta); // ease speed changes over ~0.2 s
+    // Faster than the drift (edge turning, or easing out of it): full frame rate.
+    if (Math.abs(m.speed) > DRIFT_SPEED * 1.01) activity.wake(0.15);
     if (Math.abs(m.speed) > 1e-5) void c.rotate(m.speed * delta, 0, false);
   });
 

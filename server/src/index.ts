@@ -3,11 +3,12 @@ import session from 'express-session';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { db } from './db.js';
-import { SqliteStore } from './sessionStore.js';
+import { pool, one } from './db.js';
+import { PgStore } from './sessionStore.js';
 import { authRouter } from './auth.js';
 import { requestLayout } from './layoutScheduler.js';
 import { galaxyRouter } from './galaxy.js';
+import { liveRouter } from './live.js';
 import compression from 'compression';
 
 const PORT = Number(process.env.PORT ?? 3001);
@@ -29,7 +30,7 @@ app.use(express.json({ limit: '10kb' }));
 export const sessionMiddleware = session({
   name: 'sid',
   secret: SESSION_SECRET,
-  store: new SqliteStore(db),
+  store: new PgStore(pool),
   resave: false,
   saveUninitialized: false, // no cookie or DB row until someone logs in
   rolling: true, // re-send the cookie on each response: 30 days from last visit, not from login
@@ -49,6 +50,7 @@ app.get('/api/health', (_req, res) => {
 
 app.use('/api', authRouter);
 app.use('/api', galaxyRouter);
+app.use('/api', liveRouter);
 
 // Unknown /api routes return JSON 404 instead of falling through to the SPA.
 app.use('/api', (_req, res) => {
@@ -89,11 +91,15 @@ app.use((err: unknown, _req: express.Request, res: express.Response, _next: expr
 
 // A plain HTTP server, so Socket.IO can attach to the same port later (Step 8).
 const server = http.createServer(app);
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
   console.log(`server listening on http://localhost:${PORT} (${isProd ? 'production' : 'development'})`);
   // Users without a star (for example right after "npm run reset") get one now.
-  const { missing } = db
-    .prepare('SELECT count(*) AS missing FROM users WHERE id NOT IN (SELECT user_id FROM stars)')
-    .get() as { missing: number };
-  if (missing > 0) requestLayout(`${missing} users without a star`);
+  try {
+    const { missing } = (await one<{ missing: number }>(
+      'SELECT count(*) AS missing FROM users WHERE id NOT IN (SELECT user_id FROM stars)',
+    ))!;
+    if (missing > 0) requestLayout(`${missing} users without a star`);
+  } catch (err) {
+    console.error('[db] startup check failed. Is DATABASE_URL right and schema.sql applied?', err);
+  }
 });

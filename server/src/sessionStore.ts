@@ -1,27 +1,19 @@
 import session from 'express-session';
-import type { DatabaseSync } from 'node:sqlite';
+import type pg from 'pg';
 
 const DAY = 24 * 60 * 60 * 1000;
 const CLEANUP_EVERY = 15 * 60 * 1000;
 
-/** express-session store backed by the `sessions` table in the same SQLite file. */
-export class SqliteStore extends session.Store {
-  private q;
-
-  constructor(db: DatabaseSync) {
+/** express-session store backed by the `sessions` table in Postgres. */
+export class PgStore extends session.Store {
+  constructor(private pool: pg.Pool) {
     super();
-    this.q = {
-      get: db.prepare('SELECT sess FROM sessions WHERE sid = ? AND expires > ?'),
-      set: db.prepare(
-        `INSERT INTO sessions (sid, sess, expires) VALUES (?, ?, ?)
-         ON CONFLICT(sid) DO UPDATE SET sess = excluded.sess, expires = excluded.expires`,
-      ),
-      touch: db.prepare('UPDATE sessions SET expires = ? WHERE sid = ?'),
-      destroy: db.prepare('DELETE FROM sessions WHERE sid = ?'),
-      purge: db.prepare('DELETE FROM sessions WHERE expires <= ?'),
-    };
     // Expired rows are ignored by get(); this just keeps the table small.
-    setInterval(() => this.q.purge.run(Date.now()), CLEANUP_EVERY).unref();
+    setInterval(() => {
+      this.pool.query('DELETE FROM sessions WHERE expires <= $1', [Date.now()]).catch((err) => {
+        console.error('[sessions] cleanup failed:', err.message);
+      });
+    }, CLEANUP_EVERY).unref();
   }
 
   private static expiry(sess: session.SessionData): number {
@@ -30,38 +22,30 @@ export class SqliteStore extends session.Store {
   }
 
   override get(sid: string, cb: (err: unknown, sess?: session.SessionData | null) => void) {
-    try {
-      const row = this.q.get.get(sid, Date.now()) as { sess: string } | undefined;
-      cb(null, row ? JSON.parse(row.sess) : null);
-    } catch (err) {
-      cb(err);
-    }
+    this.pool
+      .query('SELECT sess FROM sessions WHERE sid = $1 AND expires > $2', [sid, Date.now()])
+      .then((r) => cb(null, r.rows[0] ? JSON.parse(r.rows[0].sess) : null), cb);
   }
 
   override set(sid: string, sess: session.SessionData, cb?: (err?: unknown) => void) {
-    try {
-      this.q.set.run(sid, JSON.stringify(sess), SqliteStore.expiry(sess));
-      cb?.();
-    } catch (err) {
-      cb?.(err);
-    }
+    this.pool
+      .query(
+        `INSERT INTO sessions (sid, sess, expires) VALUES ($1, $2, $3)
+         ON CONFLICT (sid) DO UPDATE SET sess = excluded.sess, expires = excluded.expires`,
+        [sid, JSON.stringify(sess), PgStore.expiry(sess)],
+      )
+      .then(() => cb?.(), (err) => cb?.(err));
   }
 
   override touch(sid: string, sess: session.SessionData, cb?: (err?: unknown) => void) {
-    try {
-      this.q.touch.run(SqliteStore.expiry(sess), sid);
-      cb?.();
-    } catch (err) {
-      cb?.(err);
-    }
+    this.pool
+      .query('UPDATE sessions SET expires = $1 WHERE sid = $2', [PgStore.expiry(sess), sid])
+      .then(() => cb?.(), (err) => cb?.(err));
   }
 
   override destroy(sid: string, cb?: (err?: unknown) => void) {
-    try {
-      this.q.destroy.run(sid);
-      cb?.();
-    } catch (err) {
-      cb?.(err);
-    }
+    this.pool
+      .query('DELETE FROM sessions WHERE sid = $1', [sid])
+      .then(() => cb?.(), (err) => cb?.(err));
   }
 }

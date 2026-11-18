@@ -60,3 +60,28 @@
   pointer-events: none;
   will-change: transform;
 }
+
+/* /bench results (scene/Bench.tsx) */
+.bench-panel {
+  position: fixed;
+  top: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100vw - 32px);
+  padding: 12px 14px;
+  color: #dfe6f5;
+  background: rgba(0, 0, 0, 0.75);
+  border-radius: 8px;
+  z-index: 10;
+}
+.bench-panel pre {
+  margin: 0 0 10px;
+  font: 12px/1.5 ui-monospace, monospace;
+  white-space: pre-wrap;
+}
+.bench-panel button {
+  margin-right: 8px;
+  padding: 4px 10px;
+  font: inherit;
+  cursor: pointer;
+}

@@ -29,6 +29,18 @@ export const register = (username: string, password: string) =>
 
 export const logout = () => send<void>('POST', '/api/logout');
 
+/**
+ * Live galaxy version via Server-Sent Events (/api/live). The browser's
+ * EventSource reconnects by itself; on (re)connect the server sends the
+ * current version, so nothing missed while offline is lost. A non-200 answer
+ * (logged out) closes it for good, so it never retries in a loop.
+ */
+export function watchGalaxyVersion(onVersion: (version: number) => void): () => void {
+  const es = new EventSource('/api/live');
+  es.addEventListener('version', (e) => onVersion(Number((e as MessageEvent<string>).data)));
+  return () => es.close();
+}
+
 /** The galaxy as typed arrays, ready to hand to GPU buffers (Step 6). */
 export type GalaxyShape = { radius: number; arms: number; turns: number };
 

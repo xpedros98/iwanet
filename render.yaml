@@ -1,0 +1,19 @@
+# Render Blueprint: Dashboard → New → Blueprint → pick this repo.
+services:
+  - type: web
+    name: galaxy
+    runtime: node
+    plan: free
+    # Don't set NODE_ENV here: npm would then skip devDependencies (TypeScript,
+    # Vite) and the build would fail. "npm start" sets NODE_ENV=production itself.
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: SESSION_SECRET
+        generateValue: true
+      # Supabase Session pooler string; Render asks for it when the Blueprint is created.
+      - key: DATABASE_URL
+        sync: false

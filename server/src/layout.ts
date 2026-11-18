@@ -82,6 +82,25 @@ function rngFor(id: number): () => number {
 /** Roughly normal random value (sum of 3 uniforms), mean 0, about ±1. */
 const gauss = (r: () => number) => r() + r() + r() - 1.5;
 
+/** The arm a friend circle sits on, from its oldest member's id (stable while that member stays). */
+export const armFor = (id: number) => Math.floor(rngFor(id)() * ARMS);
+
+/**
+ * Spiral seed of a star: where it sits before the forces act.
+ * t = place along the arm (0 = centre … 1 = outer end), R = galaxy radius.
+ * Also used to place a newcomer at once on registration (layoutJob.ts).
+ */
+export function seedPosition(id: number, t: number, arm: number, R: number): [number, number, number] {
+  const r = rngFor(id);
+  const angle = (arm / ARMS) * 2 * Math.PI + t * TURNS * 2 * Math.PI;
+  const radius = R * (0.12 + 0.88 * t);
+  const spread = R * 0.06; // scatter around the arm
+  const sx = Math.cos(angle) * radius + gauss(r) * spread;
+  const sz = Math.sin(angle) * radius + gauss(r) * spread;
+  const sy = gauss(r) * R * 0.03 * (1 - 0.6 * t); // thicker near the core
+  return [sx, sy, sz];
+}
+
 type Node = SimNode & { id: number; sx: number; sy: number; sz: number; px?: number; py?: number; pz?: number };
 
 /**
@@ -158,8 +177,7 @@ export function computeLayout({ ids, links, previous }: LayoutInput, f: Forces =
     const c = community[String(id)]!;
     let circle = circles.get(c);
     if (!circle) {
-      // Arm chosen from the oldest member's id: stable while that member stays in the circle.
-      circle = { label: circles.size, arm: Math.floor(rngFor(id)() * ARMS), tSum: 0, count: 0 };
+      circle = { label: circles.size, arm: armFor(id), tSum: 0, count: 0 };
       circles.set(c, circle);
     }
     circle.tSum += (i + 0.5) / n;
@@ -170,17 +188,11 @@ export function computeLayout({ ids, links, previous }: LayoutInput, f: Forces =
   // A star's place along its arm mixes its own join time with its circle's
   // average, so each circle sits together: older circles near the centre.
   const nodes: Node[] = ids.map((id, i) => {
-    const r = rngFor(id);
     const circle = circles.get(community[String(id)]!)!;
     const own = (i + 0.5) / n; // 0 = first user, 1 = newest
     const mean = circle.tSum / circle.count;
     const t = mean + (own - mean) * f.circleSpread;
-    const angle = (circle.arm / ARMS) * 2 * Math.PI + t * TURNS * 2 * Math.PI;
-    const radius = R * (0.12 + 0.88 * t);
-    const spread = R * 0.06; // scatter around the arm
-    const sx = Math.cos(angle) * radius + gauss(r) * spread;
-    const sz = Math.sin(angle) * radius + gauss(r) * spread;
-    const sy = gauss(r) * R * 0.03 * (1 - 0.6 * t); // thicker near the core
+    const [sx, sy, sz] = seedPosition(id, t, circle.arm, R);
     const prev = previous.get(id);
     return prev
       ? { id, sx, sy, sz, x: prev[0], y: prev[1], z: prev[2], px: prev[0], py: prev[1], pz: prev[2] }

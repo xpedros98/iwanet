@@ -1,77 +1,72 @@
-import { DatabaseSync } from 'node:sqlite';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import pg from 'pg';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-// server/galaxy.db by default (works from both src/ and dist/).
-export const DB_PATH = process.env.DB_PATH ?? path.resolve(here, '../galaxy.db');
-
-export const db = new DatabaseSync(DB_PATH);
-
-// WAL: readers never block the writer and vice versa.
-// synchronous=NORMAL is safe with WAL (no corruption on crash; at worst the
-// last few commits are lost on power failure) and avoids an fsync per commit.
-db.exec(`
-  PRAGMA journal_mode = WAL;
-  PRAGMA synchronous = NORMAL;
-  PRAGMA foreign_keys = ON;
-  PRAGMA busy_timeout = 5000;
-`);
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    username   TEXT    NOT NULL UNIQUE COLLATE NOCASE,
-    hash       TEXT    NOT NULL,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch())
-  );
-
-  CREATE TABLE IF NOT EXISTS friendships (
-    user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    friend_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    PRIMARY KEY (user_id, friend_id)
-  ) WITHOUT ROWID;
-
-  -- One row per user, written by the layout job (layout.ts).
-  -- color = friend-circle index, mapped to a palette by the client.
-  CREATE TABLE IF NOT EXISTS stars (
-    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-    x REAL NOT NULL, y REAL NOT NULL, z REAL NOT NULL,
-    color INTEGER NOT NULL,
-    size  REAL    NOT NULL
-  );
-
-  -- Small key/value table; galaxy_version increases on every layout run.
-  CREATE TABLE IF NOT EXISTS meta (
-    key   TEXT PRIMARY KEY,
-    value INTEGER NOT NULL
-  ) WITHOUT ROWID;
-  INSERT OR IGNORE INTO meta (key, value) VALUES ('galaxy_version', 0);
-
-  CREATE TABLE IF NOT EXISTS sessions (
-    sid     TEXT    PRIMARY KEY,
-    sess    TEXT    NOT NULL,
-    expires INTEGER NOT NULL
-  ) WITHOUT ROWID;
-  CREATE INDEX IF NOT EXISTS sessions_expires ON sessions (expires);
-`);
-
-// Migration for databases created before the small-scale redesign: the old
-// stars table had a `tile` column (and an index on it) that is no longer used.
-const starCols = db.prepare('PRAGMA table_info(stars)').all() as { name: string }[];
-if (starCols.some((c) => c.name === 'tile')) {
-  db.exec('DROP INDEX IF EXISTS stars_tile; ALTER TABLE stars DROP COLUMN tile;');
+// Local development: read server/.env if it exists (hosts set real env vars instead).
+try {
+  process.loadEnvFile();
+} catch {
+  /* no .env file */
 }
 
-export type UserRow ={ id: number; username: string; hash: string };
+const DATABASE_URL = process.env.DATABASE_URL;
+if (!DATABASE_URL) {
+  throw new Error('Set DATABASE_URL (Supabase → Connect → Session pooler connection string), e.g. in server/.env');
+}
 
-// Prepared once, reused for every request.
+// count(*) and bigint columns come back as strings by default; every value
+// in this app fits in a JS number, so parse them as numbers.
+pg.types.setTypeParser(pg.types.builtins.INT8, (v) => Number(v));
+
+/**
+ * One connection pool per thread (the layout worker imports this file too).
+ * Kept small: Supabase's free pooler allows a limited number of connections.
+ */
+export const pool = new pg.Pool({
+  connectionString: DATABASE_URL,
+  max: Number(process.env.DB_POOL_MAX ?? 5),
+  // Supabase requires TLS; its pooler certificate isn't in Node's default CA list.
+  ssl: /localhost|127\.0\.0\.1/.test(DATABASE_URL) ? undefined : { rejectUnauthorized: false },
+});
+pool.on('error', (err) => console.error('[db] idle client error:', err.message));
+
+/** All rows of a query. */
+export async function all<T>(sql: string, params: unknown[] = [], c: pg.Pool | pg.PoolClient = pool): Promise<T[]> {
+  return (await c.query(sql, params)).rows as T[];
+}
+
+/** First row of a query, or undefined. */
+export async function one<T>(sql: string, params: unknown[] = [], c: pg.Pool | pg.PoolClient = pool): Promise<T | undefined> {
+  return (await c.query(sql, params)).rows[0] as T | undefined;
+}
+
+/** Runs fn inside a transaction on one connection; commits, or rolls back if fn throws. */
+export async function tx<T>(fn: (c: pg.PoolClient) => Promise<T>, begin = 'BEGIN'): Promise<T> {
+  const c = await pool.connect();
+  try {
+    await c.query(begin);
+    const result = await fn(c);
+    await c.query('COMMIT');
+    return result;
+  } catch (err) {
+    await c.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    c.release();
+  }
+}
+
+export const GALAXY_VERSION_SQL = "SELECT value FROM meta WHERE key = 'galaxy_version'";
+export const BUMP_VERSION_SQL = "UPDATE meta SET value = value + 1 WHERE key = 'galaxy_version' RETURNING value";
+
+export type UserRow = { id: number; username: string; hash: string };
+
 export const users = {
-  byName: db.prepare('SELECT id, username, hash FROM users WHERE username = ?'),
-  byId: db.prepare('SELECT id, username FROM users WHERE id = ?'),
-  insert: db.prepare('INSERT INTO users (username, hash) VALUES (?, ?)'),
+  byName: (username: string) =>
+    one<UserRow>('SELECT id, username, hash FROM users WHERE lower(username) = lower($1)', [username]),
+  byId: (id: number) => one<{ id: number; username: string }>('SELECT id, username FROM users WHERE id = $1', [id]),
+  insert: async (username: string, hash: string) =>
+    (await one<{ id: number }>('INSERT INTO users (username, hash) VALUES ($1, $2) RETURNING id', [username, hash]))!.id,
 };
 
 export function isUniqueViolation(err: unknown): boolean {
-  return err instanceof Error && /UNIQUE constraint failed/.test(err.message);
+  return (err as { code?: string })?.code === '23505';
 }

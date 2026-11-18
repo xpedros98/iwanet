@@ -10,11 +10,14 @@ let worker: Worker | null = null;
 let timer: NodeJS.Timeout | null = null;
 let running = false;
 let pending = false;
-const listeners: ((r: LayoutResult) => void)[] = [];
+const listeners: ((version: number) => void)[] = [];
 
-/** Called after every successful layout run (Step 8 uses it to notify browsers). */
-export function onLayoutDone(fn: (r: LayoutResult) => void) {
+/** Called with the new galaxy version after every change: a layout run or a newcomer placed (live.ts tells the browsers). */
+export function onGalaxyVersion(fn: (version: number) => void) {
   listeners.push(fn);
+}
+export function announceVersion(version: number) {
+  for (const fn of listeners) fn(version);
 }
 
 /**
@@ -47,8 +50,8 @@ function getWorker(): Worker {
     running = false;
     if (msg.ok) {
       const { version, stars, ms } = msg.result;
-      console.log(`[layout] v${version}: ${stars} stars in ${ms.read + ms.compute + ms.write} ms (compute ${ms.compute} ms)`);
-      for (const fn of listeners) fn(msg.result);
+      console.log(`[layout] v${version}: ${stars} stars in ${Math.round(ms.read + ms.compute + ms.write)} ms (compute ${Math.round(ms.compute)} ms)`);
+      announceVersion(version);
     } else {
       console.error('[layout] failed:', msg.error);
     }

@@ -38,7 +38,7 @@ function PerfOverlay() {
     const { calls, points, lines, triangles } = gl.info.render;
     el.current.textContent =
       `${Math.round(a.frames / (now - a.since))} fps · ${((a.sum / a.frames) * 1000).toFixed(1)} ms avg · ` +
-      `${(a.worst * 1000).toFixed(1)} ms worst\n${calls} draws · ${points} pts · ${lines} lines · ${triangles} tris`;
+      `${(a.worst * 1000).toFixed(1)} ms worst\n${calls} draws · ${points} pts · ${lines} lines · ${triangles} tris · ratio ${gl.getPixelRatio()}`;
     a.frames = 0;
     a.sum = 0;
     a.worst = 0;

@@ -1,9 +1,9 @@
 import { useFrame } from '@react-three/fiber';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import type { GalaxyShape } from '../../api';
 import { starFragment, starVertex } from './shaders';
-import { gauss, seededRandom } from './util';
+import { damp, gauss, seededRandom } from './util';
 import type { FrameUniforms } from './GalaxyScene';
 
 const BG_STARS = 5000;
@@ -15,11 +15,20 @@ const HAZE_TEXTURE = 256; // pixels per side; small on purpose (see the cost tab
  * from a fixed seed, so it looks the same on every visit.
  *
  * Two draw calls: the points reuse the user-star shader (same GLSL, so three.js
- * compiles it once), and the haze is one textured square.
+ * compiles it once), and the haze is one textured square (switched off by the
+ * Pacer on the lowest quality levels).
  */
 export function Background({ shape, frame }: { shape: GalaxyShape; frame: FrameUniforms }) {
+  // Built ONCE at the first radius. When the galaxy grows (radius ∝ cube root
+  // of the user count), the group is scaled instead: no rebuild, no 15 ms haze
+  // repaint during a live update.
+  const [R0] = useState(shape.radius);
+  const group = useRef<THREE.Group>(null);
+  const hazeMesh = useRef<THREE.Mesh>(null);
+  const hazeShown = useRef(true);
+  const { arms, turns } = shape;
   const { points, pointMat, haze, hazeMat, hazeTex } = useMemo(() => {
-    const R = shape.radius;
+    const R = R0;
     const rnd = seededRandom(42);
 
     // ---- faint stars ----------------------------------------------------
@@ -38,9 +47,9 @@ export function Background({ shape, frame }: { shape: GalaxyShape; frame: FrameU
         y = gauss(rnd) * R * 0.05;
       } else {
         // along an arm, same formula as the server's spiral seed
-        const arm = i % shape.arms;
+        const arm = i % arms;
         const t = rnd() ** 0.8;
-        const a = (arm / shape.arms) * Math.PI * 2 + t * shape.turns * Math.PI * 2 + gauss(rnd) * 0.22;
+        const a = (arm / arms) * Math.PI * 2 + t * turns * Math.PI * 2 + gauss(rnd) * 0.22;
         const r = R * (0.12 + 0.88 * t) * (1 + gauss(rnd) * 0.1);
         x = Math.cos(a) * r;
         z = Math.sin(a) * r;
@@ -71,6 +80,7 @@ export function Background({ shape, frame }: { shape: GalaxyShape; frame: FrameU
         uMinPx: { value: 1.5 },
         uMaxPx: { value: frame.maxPointPx(6) },
         uPulse: { value: frame.pulse * 0.6 },
+        uGlide: { value: 1 }, // background never glides
       },
       blending: THREE.AdditiveBlending,
       depthWrite: false,
@@ -78,7 +88,7 @@ export function Background({ shape, frame }: { shape: GalaxyShape; frame: FrameU
     });
 
     // ---- haze -------------------------------------------------------------
-    const hazeTex = makeHazeTexture(shape);
+    const hazeTex = makeHazeTexture({ radius: R, arms, turns });
     const haze = new THREE.PlaneGeometry(R * 2.4, R * 2.4);
     haze.rotateX(-Math.PI / 2); // lie flat on the disc
     const hazeMat = new THREE.MeshBasicMaterial({
@@ -90,7 +100,7 @@ export function Background({ shape, frame }: { shape: GalaxyShape; frame: FrameU
       opacity: 0,
     });
     return { points, pointMat, haze, hazeMat, hazeTex };
-  }, [shape, frame]);
+  }, [R0, arms, turns, frame]);
 
   useEffect(
     () => () => {
@@ -104,15 +114,25 @@ export function Background({ shape, frame }: { shape: GalaxyShape; frame: FrameU
   );
 
   // The haze fades in with everything else (MeshBasicMaterial has no uFade uniform).
-  useFrame(() => {
+  useFrame((_, delta) => {
     hazeMat.opacity = 0.55 * frame.uFade.value;
+    // Off on the lowest quality levels: no draw call, no full-screen pass.
+    // Written only on change, so the benchmark's ?hide=haze is not overridden.
+    if (hazeMesh.current && hazeShown.current !== frame.quality.haze) {
+      hazeShown.current = frame.quality.haze;
+      hazeMesh.current.visible = hazeShown.current;
+    }
+    const g = group.current;
+    if (!g) return;
+    const target = shape.radius / R0;
+    if (Math.abs(g.scale.x - target) > 1e-4) g.scale.setScalar(g.scale.x + (target - g.scale.x) * damp(2, Math.min(delta, 0.1)));
   });
 
   return (
-    <>
-      <mesh geometry={haze} material={hazeMat} frustumCulled={false} renderOrder={0} />
-      <points geometry={points} material={pointMat} frustumCulled={false} renderOrder={0} />
-    </>
+    <group ref={group}>
+      <mesh ref={hazeMesh} name="haze" geometry={haze} material={hazeMat} frustumCulled={false} renderOrder={0} />
+      <points name="background" geometry={points} material={pointMat} frustumCulled={false} renderOrder={0} />
+    </group>
   );
 }
 
@@ -148,15 +168,21 @@ function makeHazeTexture({ arms, turns }: GalaxyShape): THREE.CanvasTexture {
         }
       }
       const fadeOut = Math.max(0, Math.min(1, (1.1 - r) / 0.5)); // soft outer edge
+      // Everything fades to pure black by r = 1.05, well inside the square
+      // (±1.2): no grey can reach its edges, which showed as a faint square
+      // when zoomed out. Starts at r = 0.45, so the outer glow is darker too.
+      const e = Math.max(0, Math.min(1, (1.05 - r) / 0.6));
+      const vignette = e * e * (3 - 2 * e);
       const core = Math.exp(-(r * r) / 0.012);
-      const disc = Math.exp(-r * 2.8) * 0.25;
-      const arm = armDensity * 0.3 * fadeOut * Math.min(1, r / 0.15);
+      const disc = Math.exp(-r * 2.8) * 0.25 * vignette;
+      const arm = armDensity * 0.3 * fadeOut * vignette * Math.min(1, r / 0.15);
       const grain = 0.85 + rnd() * 0.3;
 
       const i = (py * N + px) * 4;
-      img.data[i] = Math.min(255, 255 * (core * 1.0 + disc * 0.7 + arm * 0.55) * grain);
-      img.data[i + 1] = Math.min(255, 255 * (core * 0.85 + disc * 0.7 + arm * 0.65) * grain);
-      img.data[i + 2] = Math.min(255, 255 * (core * 0.65 + disc * 0.9 + arm * 1.0) * grain);
+      // floor(): values below one step become 0 (true black), never a faint 1/255 grey
+      img.data[i] = Math.min(255, Math.floor(255 * (core * 1.0 + disc * 0.7 + arm * 0.55) * grain));
+      img.data[i + 1] = Math.min(255, Math.floor(255 * (core * 0.85 + disc * 0.7 + arm * 0.65) * grain));
+      img.data[i + 2] = Math.min(255, Math.floor(255 * (core * 0.65 + disc * 0.9 + arm * 1.0) * grain));
       img.data[i + 3] = 255;
     }
   }

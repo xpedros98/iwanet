@@ -1,8 +1,9 @@
 import { Canvas } from '@react-three/fiber';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getGalaxy, watchGalaxyVersion, type Galaxy, type User } from '../api';
 import { GalaxyScene } from './scene/GalaxyScene';
 import type { NavHandle } from './scene/Navigation';
+import { HelpPanel } from './HelpPanel';
 import './galaxy.css';
 
 type Props = { user: User; onLogout: () => void; bench?: boolean };
@@ -12,6 +13,16 @@ type Props = { user: User; onLogout: () => void; bench?: boolean };
 const SPIN_KEY = 'galaxy.spin';
 const SPIN_DEFAULT = 25;
 const spinMultiplier = (v: number) => (v / SPIN_DEFAULT) ** 2;
+// The help panel opens by itself on the first visit only.
+const HELP_SEEN_KEY = 'galaxy.helpSeen';
+function firstVisit(): boolean {
+  try {
+    return localStorage.getItem(HELP_SEEN_KEY) === null;
+  } catch {
+    return false;
+  }
+}
+
 function savedSpin(): number {
   try {
     const v = Number(localStorage.getItem(SPIN_KEY));
@@ -26,6 +37,15 @@ export default function GalaxyPage({ user, onLogout, bench = false }: Props) {
   const [error, setError] = useState('');
   const nav = useRef<NavHandle | null>(null);
   const [spinValue, setSpinValue] = useState(savedSpin);
+  const [helpOpen, setHelpOpen] = useState(() => !bench && firstVisit());
+  const closeHelp = useCallback(() => {
+    setHelpOpen(false);
+    try {
+      localStorage.setItem(HELP_SEEN_KEY, '1');
+    } catch {
+      /* ignore */
+    }
+  }, []);
   // Read every frame by Navigation; a plain object, so moving the slider doesn't re-render the scene.
   const spin = useMemo(() => ({ value: spinMultiplier(spinValue) }), []); // eslint-disable-line react-hooks/exhaustive-deps
   spin.value = spinMultiplier(spinValue);
@@ -118,7 +138,19 @@ export default function GalaxyPage({ user, onLogout, bench = false }: Props) {
         <button type="button" onClick={onLogout}>
           Log out
         </button>
+        <button
+          type="button"
+          className="galaxy-help-btn"
+          onClick={() => (helpOpen ? closeHelp() : setHelpOpen(true))}
+          aria-expanded={helpOpen}
+          aria-label="How to move around"
+          title="How to move around"
+        >
+          ?
+        </button>
       </div>
+
+      {helpOpen && <HelpPanel onClose={closeHelp} />}
 
       {error && <p className="galaxy-error">Couldn't load the galaxy: {error}</p>}
     </div>

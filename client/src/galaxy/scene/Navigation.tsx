@@ -7,7 +7,7 @@ import { damp, prefersReducedMotion } from './util';
 import type { Activity } from './Pacer';
 
 const FLY_SECONDS = 2.5; // a flight settles within this (smoothTime 0.6 → ~1% left after 2 s)
-const IDLE_SECONDS = 4; // no interaction for this long → slow drift starts
+const IDLE_SECONDS = 0.5; // after a drag, the slow drift eases back in this soon (longer looks like a freeze)
 const DRIFT_RAMP = 3; // seconds to ease the drift in
 const DRIFT_SPEED = 0.012; // rad/s ≈ one turn every 9 minutes
 const EDGE_SPEED = 0.7; // rad/s at the very edge of the screen

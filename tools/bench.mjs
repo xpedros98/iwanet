@@ -144,7 +144,7 @@ try {
   check('Draw calls per frame', String(r.drawCalls), '≤ 6', r.drawCalls <= 6);
   check('JS heap growth during the flight', r.heapGrowthMB === null ? 'not exposed' : `${r.heapGrowthMB} MB`, '', undefined);
   if (flag('reduced-motion')) check('Frames per second at rest (reduced motion)', String(r.idleFps), '0', r.idleFps === 0);
-  else check('Frames per second at rest', String(r.idleFps), '≤ 20', r.idleFps <= 21);
+  else check('Frames per second at rest', String(r.idleFps), '≤ 60', r.idleFps <= 61);
   check('End camera position', r.endCamera.join(', '), 'same on every run and screen', undefined);
 } catch (e) {
   console.error(e);

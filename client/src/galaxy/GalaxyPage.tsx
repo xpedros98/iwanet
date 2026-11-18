@@ -65,7 +65,7 @@ export default function GalaxyPage({ user, onLogout, bench = false }: Props) {
         gl={{ antialias: false, powerPreference: 'high-performance' }}
         camera={{ fov: 55, near: 0.05, far: 500 }}
         // Frames are driven by scene/Pacer.tsx: full rate while something moves,
-        // 20 per second when only the breathing and slow drift remain.
+        // 60 per second (even on faster screens) when only the breathing and slow drift remain.
         frameloop="never"
       >
         {galaxy && <GalaxyScene galaxy={galaxy} userId={user.id} nav={nav} bench={bench} />}

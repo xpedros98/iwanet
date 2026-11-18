@@ -1,8 +1,13 @@
 import { advance, useThree } from '@react-three/fiber';
 import { useEffect } from 'react';
 
-/** Rendered frames per second when nothing but breathing and the slow drift moves. */
-export const IDLE_FPS = 20;
+/**
+ * Rendered frames per second when nothing but breathing and the slow drift
+ * moves. 60, not lower: at 20 the drift and twinkle visibly stutter, which
+ * reads as the galaxy freezing whenever you stop interacting. Above 60 (on
+ * 120/144 Hz screens) slow motion looks the same, so those frames are saved.
+ */
+export const IDLE_FPS = 60;
 /**
  * Quality ladder, best first. Pixel ratio first (cost grows with its square),
  * then the haze: one textured layer that covers the whole screen when the

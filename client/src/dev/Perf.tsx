@@ -2,15 +2,14 @@ import { useFrame, useThree } from '@react-three/fiber';
 import { useEffect, useRef } from 'react';
 
 /**
- * Development-only overlay: frame rate, frame time (average and worst in the
+ * Performance overlay: frame rate, frame time (average and worst in the
  * last half second), draw calls and points drawn. Built on three.js's own
  * renderer counters, with no dependency (r3f-perf was removed: it still
  * pulls in React 18 and fiber 8, which broke the app with two Reacts).
  *
- * Vite replaces import.meta.env.DEV with a constant, so in production this is
- * `() => null` and the code below is dropped from the bundle.
+ * Shown in development and on the live site (bottom-right corner).
  */
-export const DevPerf = import.meta.env.DEV ? PerfOverlay : () => null;
+export const DevPerf = PerfOverlay;
 
 function PerfOverlay() {
   const gl = useThree((s) => s.gl);

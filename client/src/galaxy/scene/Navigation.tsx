@@ -6,7 +6,11 @@ import { shownPosition, type FrameUniforms, type Glide } from './GalaxyScene';
 import { damp, prefersReducedMotion } from './util';
 import type { Activity } from './Pacer';
 
-const FLY_SECONDS = 2.5; // a flight settles within this (smoothTime 0.6 → ~1% left after 2 s)
+// Flights (click a star, "My star", the intro) move the camera and the point
+// it looks at along STRAIGHT lines, eased in and out. camera-controls' own
+// transitions interpolate angles around the old target instead: the path
+// curves, and turns wound up by the drift are unwound as extra fast spins.
+const FLY_SECONDS = 1.6;
 const IDLE_SECONDS = 0; // after a drag, the slow drift eases back in at once (any pause looks like a freeze)
 const FLING_DECAY = 1.8; // 1/s: momentum after a drag halves every ~0.4 s
 const FLING_MAX = 3; // rad/s: a very fast flick doesn't spin wildly
@@ -73,6 +77,7 @@ export function Navigation({
     prev: { az: 0, polar: 0, dragging: false },
     /** +1 or -1: the drift keeps the direction of the last flick, so the two never cancel into a stop. */
     driftDir: 1,
+    flight: null as null | { from: THREE.Vector3; fromLook: THREE.Vector3; to: THREE.Vector3; toLook: THREE.Vector3; start: number },
   });
   const now = () => performance.now() / 1000;
 
@@ -103,7 +108,19 @@ export function Navigation({
     activity.wake(FLY_SECONDS);
     focus.current.id = focusIndex >= 0 ? glide.galaxy.ids[focusIndex]! : -1;
     focus.current.valid = false;
-    void c.setLookAt(pos[0]!, pos[1]!, pos[2]!, look[0]!, look[1]!, look[2]!, !reduced);
+    if (reduced) {
+      m.flight = null;
+      void c.setLookAt(pos[0]!, pos[1]!, pos[2]!, look[0]!, look[1]!, look[2]!, false);
+      return;
+    }
+    // From where the camera IS (not where a smoothing was heading), in a straight line.
+    m.flight = {
+      from: c.getPosition(new THREE.Vector3(), false),
+      fromLook: c.getTarget(new THREE.Vector3(), false),
+      to: new THREE.Vector3(pos[0], pos[1], pos[2]),
+      toLook: new THREE.Vector3(look[0], look[1], look[2]),
+      start: now(),
+    };
   };
 
   const flyHome = (driftAfter = false) => {
@@ -149,6 +166,8 @@ export function Navigation({
       clearTimeout(timer);
       motion.current.speed = 0;
       motion.current.fling.az = motion.current.fling.polar = 0; // grabbing stops the spin
+      motion.current.flight = null; // and any flight: the user takes over from here
+      motion.current.flyingUntil = 0;
       motion.current.lastActivity = now();
     };
     // 'control' fires for drags AND for the mouse wheel (the wheel sends no
@@ -184,6 +203,19 @@ export function Navigation({
     const delta = Math.min(rawDelta, 0.1);
     const m = motion.current;
     const t = now();
+
+    // ---- flight: straight lines for camera and look-at point, smoothstep eased
+    const fl = m.flight;
+    if (fl) {
+      const k = Math.min(1, (t - fl.start) / FLY_SECONDS);
+      const e = k * k * (3 - 2 * k);
+      tmp.c.lerpVectors(fl.from, fl.to, e);
+      tmp.t.lerpVectors(fl.fromLook, fl.toLook, e);
+      void c.setLookAt(tmp.c.x, tmp.c.y, tmp.c.z, tmp.t.x, tmp.t.y, tmp.t.z, false);
+      c.update(0); // apply now: the controls already ran their update this frame
+      activity.wake(0.1);
+      if (k >= 1) m.flight = null;
+    }
 
     // Still smoothing toward where the user sent it (zoom, drag inertia,
     // flight)? Then full frame rate. The drift never counts: it rotates with

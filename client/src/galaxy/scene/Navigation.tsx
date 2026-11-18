@@ -75,26 +75,27 @@ export function Navigation({
     return { pos: pos.toArray(), look: t.clone().multiplyScalar(0.75).toArray() };
   };
 
-  const fly = (pos: number[], look: number[], focusIndex: number) => {
+  /** driftAfter: the drift resumes as soon as the flight lands (no idle pause). */
+  const fly = (pos: number[], look: number[], focusIndex: number, driftAfter = false) => {
     const c = controls.current;
     if (!c) return;
     const m = motion.current;
     m.speed = 0; // a rotate() during the flight would cut its rotation short
-    m.lastActivity = now();
-    m.flyingUntil = m.lastActivity + FLY_SECONDS;
+    m.flyingUntil = now() + FLY_SECONDS;
+    m.lastActivity = driftAfter ? m.flyingUntil - IDLE_SECONDS : now();
     activity.wake(FLY_SECONDS);
     focus.current.id = focusIndex >= 0 ? glide.galaxy.ids[focusIndex]! : -1;
     focus.current.valid = false;
     void c.setLookAt(pos[0]!, pos[1]!, pos[2]!, look[0]!, look[1]!, look[2]!, !reduced);
   };
 
-  const flyHome = () => {
+  const flyHome = (driftAfter = false) => {
     const h = homeView();
-    fly(h.pos, h.look, mine);
+    fly(h.pos, h.look, mine, driftAfter);
   };
 
   useImperativeHandle(ref, () => ({
-    flyHome,
+    flyHome: () => flyHome(),
     // Keep the current viewing direction, come in close to the star.
     flyTo: (i) => {
       const c = controls.current;
@@ -114,7 +115,8 @@ export function Navigation({
     const c = controls.current;
     if (!c) return;
     void c.setLookAt(0, R * 1.45, R * 1.25, 0, 0, 0, false);
-    motion.current.lastActivity = now();
+    // Start "already idle", so the drift eases in from the very first frame.
+    motion.current.lastActivity = now() - IDLE_SECONDS;
     let timer: ReturnType<typeof setTimeout> | undefined;
     if (scripted) introDone.current = true;
     else if (mine >= 0) {
@@ -123,7 +125,7 @@ export function Navigation({
         const h = homeView();
         void c.setLookAt(h.pos[0]!, h.pos[1]!, h.pos[2]!, h.look[0]!, h.look[1]!, h.look[2]!, false);
         focus.current.id = glide.galaxy.ids[mine]!;
-      } else timer = setTimeout(flyHome, 1200);
+      } else timer = setTimeout(() => flyHome(true), 1200);
     }
     const onStart = () => {
       activity.wake(0.5);
@@ -152,7 +154,7 @@ export function Navigation({
   useEffect(() => {
     if (mine >= 0 && !introDone.current) {
       introDone.current = true;
-      setTimeout(flyHome, 600); // let the birth animation start first
+      setTimeout(() => flyHome(true), 600); // let the birth animation start first
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mine]);
@@ -217,7 +219,7 @@ export function Navigation({
       ref={controls}
       makeDefault
       smoothTime={0.6}
-      draggingSmoothTime={0.12}
+      draggingSmoothTime={0.05} // low: the camera follows the hand closely (higher feels like input lag)
       minDistance={0.4}
       maxDistance={R * 4}
       dollyToCursor

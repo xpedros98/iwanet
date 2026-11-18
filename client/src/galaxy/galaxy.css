@@ -33,6 +33,19 @@
   font-weight: 600;
 }
 
+.galaxy-spin {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.galaxy-spin input {
+  width: 90px;
+  accent-color: #7fa8ff;
+  cursor: pointer;
+}
+
 .galaxy-user button {
   border: 0;
   padding: 0;

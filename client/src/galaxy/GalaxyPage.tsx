@@ -1,5 +1,5 @@
 import { Canvas } from '@react-three/fiber';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { getGalaxy, watchGalaxyVersion, type Galaxy, type User } from '../api';
 import { GalaxyScene } from './scene/GalaxyScene';
 import type { NavHandle } from './scene/Navigation';
@@ -7,10 +7,36 @@ import './galaxy.css';
 
 type Props = { user: User; onLogout: () => void; bench?: boolean };
 
+// Rotation slider: 0–100, squared so the slow end has fine control.
+// 25 = 1× (the default drift), 100 = 16×, 0 = stopped.
+const SPIN_KEY = 'galaxy.spin';
+const SPIN_DEFAULT = 25;
+const spinMultiplier = (v: number) => (v / SPIN_DEFAULT) ** 2;
+function savedSpin(): number {
+  try {
+    const v = Number(localStorage.getItem(SPIN_KEY));
+    return localStorage.getItem(SPIN_KEY) !== null && v >= 0 && v <= 100 ? v : SPIN_DEFAULT;
+  } catch {
+    return SPIN_DEFAULT;
+  }
+}
+
 export default function GalaxyPage({ user, onLogout, bench = false }: Props) {
   const [galaxy, setGalaxy] = useState<Galaxy | null>(null);
   const [error, setError] = useState('');
   const nav = useRef<NavHandle | null>(null);
+  const [spinValue, setSpinValue] = useState(savedSpin);
+  // Read every frame by Navigation; a plain object, so moving the slider doesn't re-render the scene.
+  const spin = useMemo(() => ({ value: spinMultiplier(spinValue) }), []); // eslint-disable-line react-hooks/exhaustive-deps
+  spin.value = spinMultiplier(spinValue);
+  const changeSpin = (v: number) => {
+    setSpinValue(v);
+    try {
+      localStorage.setItem(SPIN_KEY, String(v));
+    } catch {
+      /* storage blocked: the setting just isn't remembered */
+    }
+  };
 
   // Load the galaxy, then keep it current: the server announces each new
   // version, and we fetch only when it is newer than what we show.
@@ -68,7 +94,7 @@ export default function GalaxyPage({ user, onLogout, bench = false }: Props) {
         // 60 per second (even on faster screens) when only the breathing and slow drift remain.
         frameloop="never"
       >
-        {galaxy && <GalaxyScene galaxy={galaxy} userId={user.id} nav={nav} bench={bench} />}
+        {galaxy && <GalaxyScene galaxy={galaxy} userId={user.id} nav={nav} bench={bench} spin={spin} />}
       </Canvas>
 
       <div className="galaxy-user">
@@ -76,6 +102,19 @@ export default function GalaxyPage({ user, onLogout, bench = false }: Props) {
         <button type="button" onClick={() => nav.current?.flyHome()}>
           My star
         </button>
+        <label className="galaxy-spin">
+          Rotation
+          <input
+            type="range"
+            min={0}
+            max={100}
+            value={spinValue}
+            aria-valuetext={`${spinMultiplier(spinValue).toFixed(1)}× speed`}
+            onChange={(e) => changeSpin(Number(e.target.value))}
+            onDoubleClick={() => changeSpin(SPIN_DEFAULT)}
+            title="Double-click to reset"
+          />
+        </label>
         <button type="button" onClick={onLogout}>
           Log out
         </button>

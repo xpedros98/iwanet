@@ -44,6 +44,7 @@ export function Navigation({
   pointer,
   activity,
   scripted = false,
+  spin,
   ref,
 }: {
   glide: Glide;
@@ -54,6 +55,8 @@ export function Navigation({
   activity: Activity;
   /** the benchmark drives the camera: no intro, drift, edge turning or follow */
   scripted?: boolean;
+  /** drift speed multiplier from the rotation slider (0 = no drift) */
+  spin: { value: number };
   ref: Ref<NavHandle>;
 }) {
   const controls = useRef<ComponentRef<typeof CameraControls>>(null);
@@ -238,11 +241,11 @@ export function Navigation({
       activity.wake(0.2); // edge turning is fast enough to need full frame rate
     }
     else if (t - m.lastActivity > IDLE_SECONDS)
-      target = m.driftDir * DRIFT_SPEED * Math.min(1, (t - m.lastActivity - IDLE_SECONDS) / DRIFT_RAMP) * (pointer.hovering ? HOVER_DRIFT : 1);
+      target = spin.value * m.driftDir * DRIFT_SPEED * Math.min(1, (t - m.lastActivity - IDLE_SECONDS) / DRIFT_RAMP) * (pointer.hovering ? HOVER_DRIFT : 1);
 
     m.speed += (target - m.speed) * damp(5, delta); // ease speed changes over ~0.2 s
     // Faster than the drift (edge turning, or easing out of it): full frame rate.
-    if (Math.abs(m.speed) > DRIFT_SPEED * 1.01) activity.wake(0.15);
+    if (Math.abs(m.speed) > DRIFT_SPEED * Math.max(1, spin.value) * 1.01) activity.wake(0.15);
     let flingAz = 0, flingPolar = 0;
     if (!pointer.dragging && Math.hypot(m.fling.az, m.fling.polar) > FLING_MIN) {
       flingAz = m.fling.az;

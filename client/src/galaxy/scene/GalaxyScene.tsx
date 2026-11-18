@@ -56,7 +56,22 @@ export function shownPosition(glide: Glide, g: number, i: number, out: THREE.Vec
   return out.set(q[k]! + (p[k]! - q[k]!) * g, q[k + 1]! + (p[k + 1]! - q[k + 1]!) * g, q[k + 2]! + (p[k + 2]! - q[k + 2]!) * g);
 }
 
-export function GalaxyScene({ galaxy, userId, nav, bench = false }: { galaxy: Galaxy; userId: number; nav: React.Ref<NavHandle>; bench?: boolean }) {
+const DEFAULT_SPIN = { value: 1 };
+
+export function GalaxyScene({
+  galaxy,
+  userId,
+  nav,
+  bench = false,
+  spin = DEFAULT_SPIN,
+}: {
+  galaxy: Galaxy;
+  userId: number;
+  nav: React.Ref<NavHandle>;
+  bench?: boolean;
+  /** drift speed multiplier, read every frame (0 = no drift) */
+  spin?: { value: number };
+}) {
   const navRef = useRef<NavHandle | null>(null);
   const pointer = useMemo<PointerState>(() => ({ inside: false, x: 0, dragging: false, hovering: false, highlight: -1 }), []);
   const setNav = (h: NavHandle | null) => {
@@ -165,7 +180,7 @@ export function GalaxyScene({ galaxy, userId, nav, bench = false }: { galaxy: Ga
       <Background shape={galaxy.shape} frame={frame} />
       <UserStars glide={glide} frame={frame} pointer={pointer} />
       {mine >= 0 && <YourStar glide={glide} index={mine} frame={frame} />}
-      <Navigation ref={setNav} glide={glide} mine={mine} frame={frame} pointer={pointer} activity={activity} scripted={bench} />
+      <Navigation ref={setNav} glide={glide} mine={mine} frame={frame} pointer={pointer} activity={activity} scripted={bench} spin={spin} />
       <Picker glide={glide} frame={frame} onSelect={onSelect} pointer={pointer} activity={activity} />
       <Pacer activity={activity} reduced={reduced} quality={frame.quality} fixedDpr={fixedDpr} />
       {bench && (

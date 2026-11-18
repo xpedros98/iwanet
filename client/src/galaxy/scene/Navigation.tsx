@@ -7,7 +7,10 @@ import { damp, prefersReducedMotion } from './util';
 import type { Activity } from './Pacer';
 
 const FLY_SECONDS = 2.5; // a flight settles within this (smoothTime 0.6 → ~1% left after 2 s)
-const IDLE_SECONDS = 0.5; // after a drag, the slow drift eases back in this soon (longer looks like a freeze)
+const IDLE_SECONDS = 0.1; // after a drag, the slow drift eases back in this soon (longer looks like a freeze)
+const FLING_DECAY = 1.8; // 1/s: momentum after a drag halves every ~0.4 s
+const FLING_MAX = 3; // rad/s: a very fast flick doesn't spin wildly
+const FLING_MIN = 0.02; // rad/s: below this the momentum is over
 const DRIFT_RAMP = 3; // seconds to ease the drift in
 const DRIFT_SPEED = 0.012; // rad/s ≈ one turn every 9 minutes
 const EDGE_SPEED = 0.7; // rad/s at the very edge of the screen
@@ -57,7 +60,15 @@ export function Navigation({
   const size = useThree((s) => s.size);
   const R = glide.galaxy.shape.radius;
   const reduced = useMemo(prefersReducedMotion, []);
-  const motion = useRef({ lastActivity: 0, flyingUntil: 0, speed: 0 });
+  const motion = useRef({
+    lastActivity: 0,
+    flyingUntil: 0,
+    speed: 0,
+    // Momentum: angular velocity measured while dragging (rad/s), carried on after release.
+    vel: { az: 0, polar: 0 },
+    fling: { az: 0, polar: 0 },
+    prev: { az: 0, polar: 0, dragging: false },
+  });
   const now = () => performance.now() / 1000;
 
   // The star the camera is looking at (user id), followed while stars glide.
@@ -81,6 +92,7 @@ export function Navigation({
     if (!c) return;
     const m = motion.current;
     m.speed = 0; // a rotate() during the flight would cut its rotation short
+    m.fling.az = m.fling.polar = 0;
     m.flyingUntil = now() + FLY_SECONDS;
     m.lastActivity = driftAfter ? m.flyingUntil - IDLE_SECONDS : now();
     activity.wake(FLY_SECONDS);
@@ -131,6 +143,7 @@ export function Navigation({
       activity.wake(0.5);
       clearTimeout(timer);
       motion.current.speed = 0;
+      motion.current.fling.az = motion.current.fling.polar = 0; // grabbing stops the spin
       motion.current.lastActivity = now();
     };
     // 'control' fires for drags AND for the mouse wheel (the wheel sends no
@@ -194,6 +207,22 @@ export function Navigation({
       f.valid = true;
     }
 
+    // ---- momentum: measure the drag's angular speed; keep it going after release
+    const az = c.azimuthAngle, polar = c.polarAngle;
+    if (pointer.dragging && delta > 0) {
+      const k = damp(20, delta); // average over the last ~50 ms of the drag
+      m.vel.az += ((az - m.prev.az) / delta - m.vel.az) * k;
+      m.vel.polar += ((polar - m.prev.polar) / delta - m.vel.polar) * k;
+    } else if (m.prev.dragging && !reduced) {
+      const clamp = (v: number) => Math.max(-FLING_MAX, Math.min(FLING_MAX, v));
+      m.fling.az = clamp(m.vel.az);
+      m.fling.polar = clamp(m.vel.polar);
+      m.vel.az = m.vel.polar = 0;
+    }
+    m.prev.az = az;
+    m.prev.polar = polar;
+    m.prev.dragging = pointer.dragging;
+
     if (reduced || t < m.flyingUntil) return;
     let target = 0;
     if (pointer.inside && !pointer.dragging) {
@@ -211,7 +240,19 @@ export function Navigation({
     m.speed += (target - m.speed) * damp(5, delta); // ease speed changes over ~0.2 s
     // Faster than the drift (edge turning, or easing out of it): full frame rate.
     if (Math.abs(m.speed) > DRIFT_SPEED * 1.01) activity.wake(0.15);
-    if (Math.abs(m.speed) > 1e-5) void c.rotate(m.speed * delta, 0, false);
+    let flingAz = 0, flingPolar = 0;
+    if (!pointer.dragging && Math.hypot(m.fling.az, m.fling.polar) > FLING_MIN) {
+      flingAz = m.fling.az;
+      flingPolar = m.fling.polar;
+      const decay = Math.exp(-FLING_DECAY * delta);
+      m.fling.az *= decay;
+      m.fling.polar *= decay;
+      activity.wake(0.15);
+    }
+    const turn = (m.speed + flingAz) * delta;
+    // camera-controls: positive polar rotate moves the camera down (polar angle grows).
+    // Never while dragging: a rotate without transition would cut the drag's own smoothing short.
+    if (!pointer.dragging && (Math.abs(turn) > 1e-7 || flingPolar !== 0)) void c.rotate(turn, flingPolar * delta, false);
   });
 
   return (
